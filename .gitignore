@@ -164,3 +164,9 @@ visualization/*
 
 # For Testing
 demo/
+
+# Python Virtual Environments
+samurai_venv/
+
+# Generated Files
+*.mp4

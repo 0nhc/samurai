@@ -423,14 +423,33 @@ class SAM2Base(torch.nn.Module):
                 batch_inds = torch.arange(B, device=device)
                 low_res_masks = low_res_multimasks[batch_inds, best_iou_inds].unsqueeze(1)
                 high_res_masks = high_res_multimasks[batch_inds, best_iou_inds].unsqueeze(1)
-                non_zero_indices = torch.argwhere(high_res_masks[0][0] > 0.0)
-                if len(non_zero_indices) == 0:
-                    high_res_bbox = [0, 0, 0, 0]
-                else:
-                    y_min, x_min = non_zero_indices.min(dim=0).values
-                    y_max, x_max = non_zero_indices.max(dim=0).values
-                    high_res_bbox = [x_min.item(), y_min.item(), x_max.item(), y_max.item()]
-                self.kf_mean, self.kf_covariance = self.kf.initiate(self.kf.xyxy_to_xyah(high_res_bbox))
+
+                # high_res_masks is [B, 1, H, W], B=2 in your case
+                B = high_res_masks.shape[0]
+                bboxes_list = []
+                for b in range(B):
+                    mask = high_res_masks[b, 0] > 0.0 # Get mask for object b
+                    non_zero_indices = torch.argwhere(mask)
+                    if len(non_zero_indices) == 0:
+                        bbox = [0, 0, 0, 0] # Default bbox
+                    else:
+                        y_min, x_min = non_zero_indices.min(dim=0).values
+                        y_max, x_max = non_zero_indices.max(dim=0).values
+                        bbox = [x_min.item(), y_min.item(), x_max.item(), y_max.item()]
+                    bboxes_list.append(bbox)
+
+                bboxes_tensor = torch.tensor(bboxes_list, device=device, dtype=torch.float32)
+                # This will create kf_mean with the correct shape [B, 8]
+                self.kf_mean, self.kf_covariance = self.kf.initiate(self.kf.xyxy_to_xyah(bboxes_tensor))
+
+                # non_zero_indices = torch.argwhere(high_res_masks[0][0] > 0.0)
+                # if len(non_zero_indices) == 0:
+                #     high_res_bbox = [0, 0, 0, 0]
+                # else:
+                #     y_min, x_min = non_zero_indices.min(dim=0).values
+                #     y_max, x_max = non_zero_indices.max(dim=0).values
+                #     high_res_bbox = [x_min.item(), y_min.item(), x_max.item(), y_max.item()]
+                # self.kf_mean, self.kf_covariance = self.kf.initiate(self.kf.xyxy_to_xyah(high_res_bbox))
                 if sam_output_tokens.size(1) > 1:
                     sam_output_token = sam_output_tokens[batch_inds, best_iou_inds]
                 self.frame_cnt += 1
@@ -441,15 +460,37 @@ class SAM2Base(torch.nn.Module):
                 batch_inds = torch.arange(B, device=device)
                 low_res_masks = low_res_multimasks[batch_inds, best_iou_inds].unsqueeze(1)
                 high_res_masks = high_res_multimasks[batch_inds, best_iou_inds].unsqueeze(1)
-                non_zero_indices = torch.argwhere(high_res_masks[0][0] > 0.0)
-                if len(non_zero_indices) == 0:
-                    high_res_bbox = [0, 0, 0, 0]
-                else:
-                    y_min, x_min = non_zero_indices.min(dim=0).values
-                    y_max, x_max = non_zero_indices.max(dim=0).values
-                    high_res_bbox = [x_min.item(), y_min.item(), x_max.item(), y_max.item()]
-                if ious[0][best_iou_inds] > self.stable_ious_threshold:
-                    self.kf_mean, self.kf_covariance = self.kf.update(self.kf_mean, self.kf_covariance, self.kf.xyxy_to_xyah(high_res_bbox))
+
+                # high_res_masks is [B, 1, H, W]
+                B = high_res_masks.shape[0]
+                bboxes_list = []
+                for b in range(B):
+                    mask = high_res_masks[b, 0] > 0.0 # Get mask for object b
+                    non_zero_indices = torch.argwhere(mask)
+                    if len(non_zero_indices) == 0:
+                        bbox = [0, 0, 0, 0] # Default bbox
+                    else:
+                        y_min, x_min = non_zero_indices.min(dim=0).values
+                        y_max, x_max = non_zero_indices.max(dim=0).values
+                        bbox = [x_min.item(), y_min.item(), x_max.item(), y_max.item()]
+                    bboxes_list.append(bbox)
+
+                bboxes_tensor = torch.tensor(bboxes_list, device=device, dtype=torch.float32)
+
+                if (ious[0][best_iou_inds] > self.stable_ious_threshold).all():
+                    # This will now update with a [B, 4] tensor
+                    self.kf_mean, self.kf_covariance = self.kf.update(self.kf_mean, self.kf_covariance, self.kf.xyxy_to_xyah(bboxes_tensor))
+
+                # non_zero_indices = torch.argwhere(high_res_masks[0][0] > 0.0)
+                # if len(non_zero_indices) == 0:
+                #     high_res_bbox = [0, 0, 0, 0]
+                # else:
+                #     y_min, x_min = non_zero_indices.min(dim=0).values
+                #     y_max, x_max = non_zero_indices.max(dim=0).values
+                #     high_res_bbox = [x_min.item(), y_min.item(), x_max.item(), y_max.item()]
+                # # if ious[0][best_iou_inds] > self.stable_ious_threshold:
+                # if (ious[0][best_iou_inds] > self.stable_ious_threshold).all():
+                #     self.kf_mean, self.kf_covariance = self.kf.update(self.kf_mean, self.kf_covariance, self.kf.xyxy_to_xyah(high_res_bbox))
                     self.stable_frames += 1
                 else:
                     self.stable_frames = 0
@@ -458,18 +499,34 @@ class SAM2Base(torch.nn.Module):
                 self.frame_cnt += 1
             else:
                 self.kf_mean, self.kf_covariance = self.kf.predict(self.kf_mean, self.kf_covariance)
-                high_res_multibboxes = []
-                batch_inds = torch.arange(B, device=device)
-                for i in range(ious.shape[1]):
-                    non_zero_indices = torch.argwhere(high_res_multimasks[batch_inds, i].unsqueeze(1)[0][0] > 0.0)
-                    if len(non_zero_indices) == 0:
-                        high_res_multibboxes.append([0, 0, 0, 0])
-                    else:
-                        y_min, x_min = non_zero_indices.min(dim=0).values
-                        y_max, x_max = non_zero_indices.max(dim=0).values
-                        high_res_multibboxes.append([x_min.item(), y_min.item(), x_max.item(), y_max.item()])
+                # high_res_multibboxes = []
+                # batch_inds = torch.arange(B, device=device)
+                # for i in range(ious.shape[1]):
+                #     non_zero_indices = torch.argwhere(high_res_multimasks[batch_inds, i].unsqueeze(1)[0][0] > 0.0)
+                #     if len(non_zero_indices) == 0:
+                #         high_res_multibboxes.append([0, 0, 0, 0])
+                #     else:
+                #         y_min, x_min = non_zero_indices.min(dim=0).values
+                #         y_max, x_max = non_zero_indices.max(dim=0).values
+                #         high_res_multibboxes.append([x_min.item(), y_min.item(), x_max.item(), y_max.item()])
+                B, M, H, W = high_res_multimasks.shape
+                high_res_multibboxes = high_res_multimasks.new_full((B, M, 4), -1e6)
+                for b in range(B):
+                    for m in range(M):
+                        mask = high_res_multimasks[b, m] > 0.0
+                        non_zero_indices = torch.argwhere(mask) # [N, 2] tensor of (y, x)
+                        if len(non_zero_indices) == 0:
+                            # Keep the -1e6 placeholder
+                            continue
+                        else:
+                            y_min, x_min = non_zero_indices.min(dim=0).values
+                            y_max, x_max = non_zero_indices.max(dim=0).values
+                            # Set the bbox [x1, y1, x2, y2]
+                            high_res_multibboxes[b, m] = torch.stack([x_min, y_min, x_max, y_max]).float()
+                
                 # compute the IoU between the predicted bbox and the high_res_multibboxes
-                kf_ious = torch.tensor(self.kf.compute_iou(self.kf_mean[:4], high_res_multibboxes), device=device)
+                # kf_ious = torch.tensor(self.kf.compute_iou(self.kf_mean[:4], high_res_multibboxes), device=device)
+                kf_ious = torch.tensor(self.kf.compute_iou(self.kf_mean[:, :4], high_res_multibboxes), device=device)
                 # weighted iou
                 weighted_ious = self.kf_score_weight * kf_ious + (1 - self.kf_score_weight) * ious
                 best_iou_inds = torch.argmax(weighted_ious, dim=-1)
@@ -492,10 +549,14 @@ class SAM2Base(torch.nn.Module):
                     }
                 self.frame_cnt += 1
 
-                if ious[0][best_iou_inds] < self.stable_ious_threshold:
+                # if ious[0][best_iou_inds] < self.stable_ious_threshold:
+                if (ious[0][best_iou_inds] < self.stable_ious_threshold).all():
                     self.stable_frames = 0
                 else:
-                    self.kf_mean, self.kf_covariance = self.kf.update(self.kf_mean, self.kf_covariance, self.kf.xyxy_to_xyah(high_res_multibboxes[best_iou_inds]))
+                    n_queries = high_res_multibboxes.shape[0]
+                    query_indices = torch.arange(n_queries, device=best_iou_inds.device)
+                    selected_bboxes = high_res_multibboxes[query_indices, best_iou_inds]
+                    self.kf_mean, self.kf_covariance = self.kf.update(self.kf_mean, self.kf_covariance, self.kf.xyxy_to_xyah(selected_bboxes))
         elif multimask_output and not self.samurai_mode:
             # take the best mask prediction (with the highest IoU estimation)
             best_iou_inds = torch.argmax(ious, dim=-1)
@@ -530,7 +591,7 @@ class SAM2Base(torch.nn.Module):
             obj_ptr,
             object_score_logits,
             ious[0][best_iou_inds],
-            kf_ious[best_iou_inds] if kf_ious is not None else None,
+            kf_ious[batch_inds, best_iou_inds] if kf_ious is not None else None,
         )
 
     def _use_mask_as_output(self, backbone_features, high_res_features, mask_inputs):
@@ -668,9 +729,10 @@ class SAM2Base(torch.nn.Module):
                         obj_score = output_dict["non_cond_frame_outputs"][i]["object_score_logits"]  # Get object score
                         kf_score = output_dict["non_cond_frame_outputs"][i]["kf_score"] if "kf_score" in output_dict["non_cond_frame_outputs"][i] else None  # Get motion score if available
                         # Check if the scores meet the criteria for being a valid index
-                        if iou_score.item() > self.memory_bank_iou_threshold and \
-                           obj_score.item() > self.memory_bank_obj_score_threshold and \
-                           (kf_score is None or kf_score.item() > self.memory_bank_kf_score_threshold):
+                        # if iou_score.item() > self.memory_bank_iou_threshold and \
+                        if (iou_score > self.memory_bank_iou_threshold).all() and \
+                           (obj_score > self.memory_bank_obj_score_threshold).all() and \
+                           (kf_score is None or (kf_score > self.memory_bank_kf_score_threshold).all()):
                             valid_indices.insert(0, i)  
                         # Check the number of valid indices
                         if len(valid_indices) >= self.max_obj_ptrs_in_encoder - 1:  
